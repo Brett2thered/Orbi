@@ -1064,10 +1064,33 @@ function glossMat(holes){
 const realG=new THREE.Group();home.add(realG);
 const real=[];
 {
+  // the shell and the panels have real wall thickness here: a reveal around every opening and a square rim on every panel
+  const WALL=0.07,PADT=0.06,wa=PAD_ANG+0.001;
+  const wallM=new THREE.MeshPhysicalMaterial({color:0xe9eaed,roughness:0.3,clearcoat:.6,clearcoatRoughness:0.12,envMapIntensity:1.1,side:THREE.DoubleSide});
+  const revealGeo=lathe([[(R-WALL)*Math.sin(wa),(R-WALL)*Math.cos(wa)],[R*Math.sin(wa),R*Math.cos(wa)]],72);
+  const padGeoR=(()=>{const Ri=R-PADT,p=[],n=14;
+    for(let i=0;i<=n;i++){const a=PAD_ANG*i/n;p.push([Ri*Math.sin(a),Ri*Math.cos(a)]);}
+    for(let i=n;i>=0;i--){const a=PAD_ANG*i/n;p.push([R*Math.sin(a),R*Math.cos(a)]);}
+    p[0][0]=0;p[p.length-1][0]=0;
+    // split into faces so the rim is a crisp band with its own material; the two curved faces keep smooth radial normals
+    const g0=lathe(p,72).toNonIndexed(),P=g0.attributes.position,nT=P.count/3,cr=Math.cos(PAD_ANG)+1e-4,v=new V3();
+    const face=[],rim=[];
+    for(let t=0;t<nT;t++){let r=true;for(let k=0;k<3;k++){v.fromBufferAttribute(P,t*3+k);if(v.y/v.length()>cr)r=false;}(r?rim:face).push(t);}
+    const pos=new Float32Array(P.count*3),nor=new Float32Array(P.count*3);let o=0;
+    const a=new V3(),b=new V3(),c=new V3(),fn=new V3();
+    for(const [list,isRim] of [[face,false],[rim,true]])for(const t of list){
+      a.fromBufferAttribute(P,t*3);b.fromBufferAttribute(P,t*3+1);c.fromBufferAttribute(P,t*3+2);
+      fn.set(a.x+b.x+c.x,0,a.z+b.z+c.z).normalize().multiplyScalar(Math.cos(PAD_ANG)).setY(-Math.sin(PAD_ANG));   // rim faces outward, square to the skin
+      for(const q of [a,b,c]){pos.set([q.x,q.y,q.z],o);
+        if(isRim)nor.set([fn.x,fn.y,fn.z],o);
+        else{const l=q.length(),sgn=l>R-PADT/2?1:-1;nor.set([sgn*q.x/l,sgn*q.y/l,sgn*q.z/l],o);}
+        o+=3;}}
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.setAttribute('normal',new THREE.BufferAttribute(nor,3));
+    g.addGroup(0,face.length*3,0);g.addGroup(face.length*3,rim.length*3,1);return g;})();
   const sg=new THREE.SphereGeometry(1,128,96);sg.setAttribute('aDir',sg.attributes.position.clone());
   const shellR=new THREE.Mesh(sg,glossMat(true));shellR.castShadow=true;realG.add(shellR);
-  const liner=new THREE.Mesh(new THREE.SphereGeometry(0.952,64,48),std(0xe4e5e7,0.55));liner.receiveShadow=true;realG.add(liner);
-  const collarGeo=lathe([[0.058,0.945],[0.085,0.945],[0.085,0.962],[0.072,0.972],[0.058,0.972]],28),collarM=std(0xcfd1d5,0.4);
+  const liner=new THREE.Mesh(new THREE.SphereGeometry(R-WALL,64,48),std(0xe4e5e7,0.55));liner.receiveShadow=true;realG.add(liner);
+  const collarGeo=lathe([[0.058,0.925],[0.085,0.925],[0.085,0.94],[0.072,0.95],[0.058,0.95]],28),collarM=std(0xcfd1d5,0.4);
   const padM=glossMat(false),metal=std(0xb4b8bf,0.32,{metalness:1}),houseM=std(0x34373d,0.42,{metalness:.75});
   const stemMat=()=>{const m=std(0xc2c6cc,0.3,{metalness:1});m.userData.uExt={value:0};
     m.onBeforeCompile=sh=>{sh.uniforms.uExt=m.userData.uExt;
@@ -1076,14 +1099,15 @@ const real=[];
     return m;};
   acts.forEach(a=>{
     const g=new THREE.Group();g.quaternion.copy(a.g.quaternion);realG.add(g);
-    const pg=padGeo.clone(),P=pg.attributes.position,D=new Float32Array(P.count*3),v=new V3();
-    const N=pg.attributes.normal;for(let i=0;i<P.count;i++){v.fromBufferAttribute(P,i);if(Math.abs(v.length()-R)<1e-3){const l=v.length();N.setXYZ(i,v.x/l,v.y/l,v.z/l);}
+    const pg=padGeoR.clone(),P=pg.attributes.position,D=new Float32Array(P.count*3),v=new V3();
+    for(let i=0;i<P.count;i++){v.fromBufferAttribute(P,i);
       v.applyQuaternion(g.quaternion).normalize();D[i*3]=v.x;D[i*3+1]=v.y;D[i*3+2]=v.z;}
     pg.setAttribute('aDir',new THREE.BufferAttribute(D,3));
     const slide=new THREE.Group();g.add(slide);
-    const sm=stemMat(),pad=new THREE.Mesh(pg,padM),stem=new THREE.Mesh(colGeo,sm),fl=new THREE.Mesh(flangeGeo,metal);
+    const sm=stemMat(),pad=new THREE.Mesh(pg,[padM,wallM]),stem=new THREE.Mesh(colGeo,sm),fl=new THREE.Mesh(flangeGeo,metal);
     pad.castShadow=stem.castShadow=fl.castShadow=true;pad.receiveShadow=true;slide.add(pad,stem,fl);slide.userData.uExt=sm.userData.uExt;real.push(slide);
     g.add(new THREE.Mesh(collarGeo,collarM));
+    const rv=new THREE.Mesh(revealGeo,wallM);rv.receiveShadow=true;g.add(rv);
   });
 }
 // reflections: capture the room once, from where the robot stands
